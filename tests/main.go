@@ -6,7 +6,8 @@ import (
 )
 
 func main() {
-	out := serpent.Compile(`
+	var err error
+	out, _ := serpent.Compile(`
 x = 248
 while x > 1:
 	if (x % 2) == 0:
@@ -16,4 +17,10 @@ while x > 1:
 	`)
 
 	fmt.Println(out)
+
+	_, err = serpent.Compile(`
+a >
+`)
+
+	fmt.Println(err)
 }

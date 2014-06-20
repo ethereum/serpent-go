@@ -7,8 +7,21 @@ package serpent
 //
 import "C"
 
-func Compile(str string) string {
-	out := C.compileGo(C.CString(str))
+import (
+	"encoding/hex"
+	"errors"
+	"unsafe"
+)
 
-	return C.GoString(out)
+func Compile(str string) ([]byte, error) {
+	var err C.int
+	out := C.GoString(C.compileGo(C.CString(str), (*C.int)(unsafe.Pointer(&err))))
+
+	if err == C.int(1) {
+		return nil, errors.New(out)
+	}
+
+	bytes, _ := hex.DecodeString(out)
+
+	return bytes, nil
 }

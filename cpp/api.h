@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-const char *compileGo(char *code);
+const char *compileGo(char *code, int *err);
 
 #ifdef __cplusplus
 }

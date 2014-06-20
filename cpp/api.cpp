@@ -3,7 +3,13 @@
 
 #include "api.h"
 
-const char *compileGo(char *code)
+const char *compileGo(char *code, int *err)
 {
-	return compile(std::string(code)).c_str();
+    try {
+        return compile(std::string(code)).c_str();
+    }
+    catch(std::string &error) {
+        *err = 1;
+        return error.c_str();
+    }
 }
