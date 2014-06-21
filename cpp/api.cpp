@@ -1,8 +1,13 @@
 #include <string>
-#include "serpent/funcs.h"
 
-#include "api.h"
-#include <iostream>
+#include "serpent/lllparser.h"
+#include "serpent/bignum.h"
+#include "serpent/util.h"
+#include "serpent/tokenize.h"
+#include "serpent/parser.h"
+#include "serpent/compiler.h"
+
+#include "cpp/api.h"
 
 const char *compileGo(char *code, int *err)
 {

@@ -1,7 +1,7 @@
 package serpent
 
 // #cgo CXXFLAGS: -std=c++0x -Wall -fno-strict-aliasing
-// #cgo LDFLAGS: -lstdc++ -L/usr/local/lib -lserpent
+// #cgo LDFLAGS: -lstdc++
 //
 // #include "cpp/api.h"
 //

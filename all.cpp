@@ -1,1 +1,10 @@
+#include "serpent/bignum.cpp"
+#include "serpent/util.cpp"
+#include "serpent/tokenize.cpp"
+#include "serpent/parser.cpp"
+#include "serpent/compiler.cpp"
+#include "serpent/funcs.cpp"
+#include "serpent/lllparser.cpp"
+#include "serpent/rewriter.cpp"
+
 #include "cpp/api.cpp"
