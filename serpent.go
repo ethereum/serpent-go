@@ -1,6 +1,6 @@
 package serpent
 
-// #cgo CXXFLAGS: -I. -std=c++0x -Wall -fno-strict-aliasing
+// #cgo CXXFLAGS: -I. -Ilangs/ -std=c++0x -Wall -fno-strict-aliasing
 // #cgo LDFLAGS: -lstdc++
 //
 // #include "cpp/api.h"
