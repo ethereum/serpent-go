@@ -2,25 +2,20 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/obscuren/serpent-go"
 )
 
 func main() {
-	var err error
 	out, _ := serpent.Compile(`
-x = 248
-while x > 1:
-	if (x % 2) == 0:
-		x = x / 2
-	else:
-		x = 3 * x + 1
+// Namecoin
+if !contract.storage[msg.data[0]]: # Is the key not yet taken?
+    # Then take it!
+    contract.storage[msg.data[0]] = msg.data[1]
+    return(1)
+else:
+    return(0) // Otherwise do nothing
 	`)
 
-	fmt.Println(out)
-
-	_, err = serpent.Compile(`
-a >
-`)
-
-	fmt.Println(err)
+	fmt.Printf("%x\n", out)
 }
