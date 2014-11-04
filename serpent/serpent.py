@@ -2,7 +2,7 @@ import serpent_pyext as pyext
 import sys
 import re
 
-VERSION = '1.7.0'
+VERSION = '1.7.3'
 
 
 class Metadata(object):
@@ -116,18 +116,20 @@ def numberize(b):
         raise Exception("Cannot identify data type: %r" % b)
 
 
+def enc(n):
+    if is_numeric(n):
+        return ''.join(map(chr, tobytearr(n, 32)))
+    elif is_string(n) and len(n) == 40:
+        return '\x00' * 12 + n.decode('hex')
+    elif is_string(n):
+        return '\x00' * (32 - len(n)) + n
+    elif n is True:
+        return 1
+    elif n is False or n is None:
+        return 0
+
+
 def encode_datalist(*args):
-    def enc(n):
-        if is_numeric(n):
-            return ''.join(map(chr, tobytearr(n, 32)))
-        elif is_string(n) and len(n) == 40:
-            return '\x00' * 12 + n.decode('hex')
-        elif is_string(n):
-            return '\x00' * (32 - len(n)) + n
-        elif n is True:
-            return 1
-        elif n is False or n is None:
-            return 0
     if isinstance(args, (tuple, list)):
         return ''.join(map(enc, args))
     elif not len(args) or args[0] == '':
@@ -146,6 +148,32 @@ def decode_datalist(arr):
     return o
 
 
+def encode_abi(funid, *args):
+    o = chr(int(funid))
+    if len(args) == 1 and isinstance(args[0], list):
+        args = args[0]
+    for arg in args:
+        if isinstance(arg, str) and ':' in arg:
+            val, length = arg.split(':')
+            o += enc(numberize(val))[32 - int(length):]
+        else:
+            o += enc(numberize(arg))
+    return o
+
+
+def decode_abi(arr, *lens):
+    o = []
+    pos = 1
+    i = 0
+    if len(lens) == 1 and isinstance(lens[0], list):
+        lens = lens[0]
+    while pos < len(arr):
+        bytez = int(lens[i]) if i < len(lens) else 32
+        o.append(frombytes(arr[pos: pos + bytez]))
+        i, pos = i + 1, pos + bytez
+    return o
+
+
 def main():
     if len(sys.argv) == 1:
         print "serpent <command> <arg1> <arg2> ..."
@@ -153,14 +181,14 @@ def main():
         cmd = sys.argv[2] if sys.argv[1] == '-s' else sys.argv[1]
         if sys.argv[1] == '-s':
             args = [sys.stdin.read()] + sys.argv[3:]
-            if cmd == 'deserialize':
-                args[0] = args[0].strip().decode('hex')
         elif sys.argv[1] == '-v':
             print VERSION
             sys.exit()
         else:
             cmd = sys.argv[1]
             args = sys.argv[2:]
+        if cmd in ['deserialize', 'decode_datalist', 'decode_abi']:
+            args[0] = args[0].strip().decode('hex')
         o = globals()[cmd](*args)
         if isinstance(o, (Token, Astnode, list)):
             print repr(o)
