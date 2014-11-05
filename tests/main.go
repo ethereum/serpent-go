@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/obscuren/serpent-go"
+	"github.com/ethereum/serpent-go"
 )
 
 func main() {
