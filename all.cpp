@@ -7,4 +7,10 @@
 #include "serpent/lllparser.cpp"
 #include "serpent/rewriter.cpp"
 
+#include "serpent/opcodes.cpp"
+#include "serpent/optimize.cpp"
+#include "serpent/functions.cpp"
+#include "serpent/preprocess.cpp"
+#include "serpent/rewriteutils.cpp"
+
 #include "cpp/api.cpp"
