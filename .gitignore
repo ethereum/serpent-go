@@ -3,3 +3,5 @@
 *un~
 .DS_Store
 */**/.DS_Store
+*.swp
+test_main

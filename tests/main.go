@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/ethereum/serpent-go"
 )
 
 func main() {
-	out, _ := serpent.Compile(`
+	out, err := serpent.Compile(`
 def register(key, value):
     # Key not yet claimed
     if not self.storage[key]:
@@ -16,6 +17,10 @@ def register(key, value):
     else:
         return(0)  # Key already claimed
 	`)
-
-	fmt.Printf("%x\n", out)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+	} else {
+		fmt.Printf("%x\n", out)
+	}
+	os.Stdout.Sync()
 }

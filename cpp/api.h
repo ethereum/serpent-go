@@ -5,6 +5,8 @@
 extern "C" {
 #endif
 
+void free(void *ptr);
+
 const char *compileGo(char *code, int *err);
 
 #ifdef __cplusplus
