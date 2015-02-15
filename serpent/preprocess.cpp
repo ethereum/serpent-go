@@ -10,24 +10,47 @@
 #include "preprocess.h"
 #include "functions.h"
 #include "opcodes.h"
+#include "keccak-tiny-wrapper.h"
+
+// Convert single-letter types to long types
+std::string typeMap(char t) {
+    return
+        t == 'i' ? "int256"
+      : t == 's' ? "string"
+      : t == 'a' ? "int256[]"
+      :            "weird";
+}
+
+// Get the one-line argument summary for a function based on its signature
+std::string getSummary(std::string functionName, std::string signature) {
+    std::string o = functionName + "(";
+    for (unsigned i = 0; i < signature.size(); i++) {
+        o += typeMap(signature[i]);
+        if (i != signature.size() - 1) o += ",";
+    }
+    o += ")";
+    return o;
+}
+
+// Get the prefix bytes for a function based on its signature
+unsigned int getPrefix(std::string functionName, std::string signature) {
+    std::vector<uint8_t> h = sha3(getSummary(functionName, signature));
+    return (h[0] << 24) + (h[1] << 16) + (h[2] << 8) + h[3];
+}
 
 // Convert a function of the form (def (f x y z) (do stuff)) into
 // (if (first byte of ABI is correct) (seq (setup x y z) (do stuff)))
-Node convFunction(Node node, int functionCount) {
+Node convFunction(int functionPrefix, std::vector<Node> args, Node body) {
     std::string prefix = "_temp"+mkUniqueToken()+"_";
-    Metadata m = node.metadata;
+    Metadata m = body.metadata;
 
-    if (node.args.size() != 2)
-        err("Malformed def!", m);
     // Collect the list of variable names and variable byte counts
-    Node unpack = unpackArguments(node.args[0].args, m);
-    // And the actual code
-    Node body = node.args[1];
+    Node unpack = unpackArguments(args, m);
     // Main LLL-based function body
     return astnode("if",
                    astnode("eq",
                            astnode("get", token("__funid", m), m),
-                           token(unsignedToDecimal(functionCount), m),
+                           token(unsignedToDecimal(functionPrefix), m),
                            m),
                    astnode("seq", unpack, body, m));
 }
@@ -48,7 +71,8 @@ svObj getStorageVars(svObj pre, Node node, std::string prefix,
         for (unsigned i = h.size() - 1; i >= 1; i--) {
             // Array sizes must be constant or at least arithmetically
             // evaluable at compile time
-            if (!isPureArithmetic(h[i]))
+            h[i] = calcArithmetic(h[i], false);
+            if (!isNumberLike(h[i]))
                 err("Array size must be fixed value", m);
             // Create a list of the coefficient associated with each
             // array index
@@ -83,7 +107,8 @@ svObj getStorageVars(svObj pre, Node node, std::string prefix,
         for (unsigned i = h.size() - 1; i >= 1; i--) {
             // Array sizes must be constant or at least arithmetically
             // evaluable at compile time
-            if (!isPureArithmetic(h[i]))
+            h[i] = calcArithmetic(h[i], false);
+            if (!isNumberLike(h[i]))
                err("Array size must be fixed value", m);
             // Create a list of the coefficient associated with each
             // array index
@@ -91,6 +116,7 @@ svObj getStorageVars(svObj pre, Node node, std::string prefix,
         }
         pre.offsets = sub.offsets;
         pre.coefficients = sub.coefficients;
+        pre.indices = sub.indices;
         pre.nonfinal = sub.nonfinal;
         pre.nonfinal[prefix+h[0].val.substr(2)] = true;
     }
@@ -100,6 +126,55 @@ svObj getStorageVars(svObj pre, Node node, std::string prefix,
     if (decimalGt(tt176, coefficients.back()))
         pre.globalOffset = decimalAdd(pre.globalOffset, coefficients.back());
     return pre;
+}
+
+// Type inference on output (may fail if inconsistent or too low-level)
+std::string inferType(Node node) {
+    Metadata m = node.metadata;
+    if (node.type == TOKEN)
+        return "void";
+    std::string cur;
+    if (node.val == "return") {
+        if (node.args[0].val == ":") {
+            if (node.args[0].args[1].type == ASTNODE)
+                err("Invalid type: "+printSimple(node.args[0].args[1]), m);
+            else if (node.args[0].args[1].val == "arr")
+                cur = "arr";
+            else if (node.args[0].args[1].val == "str")
+                cur = "str";
+            else
+                err("Invalid type: "+printSimple(node.args[0].args[1]), m);
+        }
+        else if (node.args.size() == 1) {
+            cur = "int";
+        }
+        else if (node.args[1].val == "=") {
+            if (node.args[1].args[0].val == "items")
+                cur = "arr";
+            else if (node.args[1].args[0].val == "chars")
+                cur = "str";
+            else
+                err("Invalid type: "+printSimple(node.args[1].args[0]), m);
+        }
+        else
+            err("Invalid return command: "+printSimple(node), m);
+    }
+    else if (node.val == "~return") {
+        return "unknown";
+    }
+    else cur = "void";
+    for (unsigned i = 0; i < node.args.size(); i++) {
+        std::string newCur = inferType(node.args[i]);
+        if (newCur == "unknown" || newCur == "inconsistent")
+            return newCur;
+        else if (cur == "void")
+            cur = newCur;
+        else if (newCur != "void" && cur != newCur) {
+            warn("Warning: function return type inconsistent!", m);
+            return "inconsistent";
+        }
+    }
+    return cur;
 }
 
 // Preprocess input containing functions
@@ -137,8 +212,7 @@ preprocessResult preprocessInit(Node inp) {
     std::vector<Node> any;
     std::vector<Node> functions;
     preprocessAux out = preprocessAux();
-    out.localExterns["self"] = std::map<std::string, int>();
-    int functionCount = 0;
+    std::map<int, std::string> functionPrefixesUsed;
     int storageDataCount = 0;
     for (unsigned i = 0; i < inp.args.size(); i++) {
         Node obj = inp.args[i];
@@ -146,50 +220,98 @@ preprocessResult preprocessInit(Node inp) {
         if (obj.val == "def") {
             if (obj.args.size() == 0)
                 err("Empty def", m);
+            // Determine name, arguments, return type, body
             std::string funName = obj.args[0].val;
+            std::vector<Node> funArgs = obj.args[0].args;
+            Node body = obj.args[1];
+            std::string funReturnType = inferType(body);
+            if (funReturnType == "unknown" || funReturnType == "inconsistent")
+                funReturnType = "";
             // Init, shared and any are special functions
             if (funName == "init" || funName == "shared" || funName == "any") {
                 if (obj.args[0].args.size())
                     err(funName+" cannot have arguments", m);
             }
-            if (funName == "init") init = obj.args[1];
-            else if (funName == "shared") shared = obj.args[1];
-            else if (funName == "any") any.push_back(obj.args[1]);
+            if (funName == "init") init = body;
+            else if (funName == "shared") shared = body;
+            else if (funName == "any") any.push_back(body);
+            // Other functions
             else {
-                // Other functions
-                functions.push_back(convFunction(obj, functionCount));
-                out.localExterns["self"][obj.args[0].val] = functionCount;
-                out.localExternSigs["self"][obj.args[0].val] 
-                    = getSignature(obj.args[0].args);
-                functionCount++;
+                // Calculate signature
+                std::string sig = getSignature(funArgs);
+                // Calculate argument name list
+                strvec argNames = getArgNames(funArgs);
+                // Get function prefix and check collisions
+                unsigned int functionPrefix = getPrefix(obj.args[0].val, sig);
+                if (functionPrefixesUsed.count(functionPrefix)) {
+                    err("Hash collision between function prefixes: "
+                        + obj.args[0].val
+                        + ", "
+                        + functionPrefixesUsed[functionPrefix], m);
+                }
+                if (out.interns.count(obj.args[0].val)) {
+                    err("Defining the same function name twice: "
+                        +obj.args[0].val, m);
+                }
+                // Add function
+                functions.push_back(convFunction(functionPrefix, funArgs, body));
+                functionMetadata f = 
+                    functionMetadata(functionPrefix, sig, argNames, funReturnType);
+                out.interns[funName] = f;
+                out.interns[funName + "::" + sig] = f;
+                functionPrefixesUsed[functionPrefix] = obj.args[0].val;
             }
         }
         // Extern declarations
         else if (obj.val == "extern") {
             std::string externName = obj.args[0].val;
-            Node al = obj.args[1];
-            if (!out.localExterns.count(externName))
-                out.localExterns[externName] = std::map<std::string, int>();
-            for (unsigned i = 0; i < al.args.size(); i++) {
-                if (al.args[i].val == ":") {
-                    std::string v = al.args[i].args[0].val;
-                    std::string sig = al.args[i].args[1].val;
-                    out.globalExterns[v] = i;
-                    out.globalExternSigs[v] = sig;
-                    out.localExterns[externName][v] = i;
-                    out.localExternSigs[externName][v] = sig;
+            std::vector<Node> externFuns = obj.args[1].args;
+            std::string fun, sig, outsig;
+            // Process each function in each extern declaration
+            for (unsigned i = 0; i < externFuns.size(); i++) {
+                std::string fun, sig, o;
+                if (externFuns[i].val != ":") {
+                    warn("The extern foo: [bar, ...] extern format is "
+                         "deprecated. Please regenerate the signature "
+                         "for the contract you are including with "
+                         " `serpent mk_signature <file>` and reinsert "
+                         "it at your convenience", m);
+                    fun = externFuns[i].val;
+                    sig = "";
+                    o = "";
+                }
+                else if (externFuns[i].args[0].val != ":") {
+                    warn("The foo:i extern format is deprecated. It will "
+                         "still work for now but better regenerate the "
+                         "signature with `serpent mk_signature <file>` and "
+                         "paste the new signature in", m);
+                    fun = externFuns[i].args[0].val;
+                    sig = externFuns[i].args[1].val;
+                    o = "";
                 }
                 else {
-                    std::string v = al.args[i].val;
-                    out.globalExterns[v] = i;
-                    out.globalExternSigs[v] = "";
-                    out.localExterns[externName][v] = i;
-                    out.localExternSigs[externName][v] = "";
+                    fun = externFuns[i].args[0].args[0].val;
+                    sig = externFuns[i].args[0].args[1].val;
+                    if (sig == "_") sig = "";
+                    o = externFuns[i].args[1].val;
                 }
+
+                std::string outType = (o == "a") ? "arr"
+                                    : (o == "s") ? "str"
+                                    : (o == "i") ? "int"
+                                    :              "";
+                unsigned int functionPrefix = getPrefix(fun, sig);
+                functionMetadata f 
+                    = functionMetadata(functionPrefix, sig, strvec(), outType);
+                if (out.externs.count(fun))
+                    out.externs[fun].ambiguous = true;
+                else
+                    out.externs[fun] = f;
+                out.externs[fun + "::" + sig] = f;
             }
         }
         // Custom macros
-        else if (obj.val == "macro") {
+        else if (obj.val == "macro" || (obj.val == "fun" && obj.args[0].val == "macro")) {
             // Rules for valid macros:
             //
             // There are only four categories of valid macros:
@@ -202,9 +324,27 @@ preprocessResult preprocessInit(Node inp) {
             // be an existing valid function/extern/datum
             // 4. something of the form set(access(c(x)), d) where c must
             // NOT be an existing valid function/extern/datum
+            // 5. something of the form with(c(x), d, e) where c must
+            // NOT be an existing valid function/extern/datum
             bool valid = false;
-            Node pattern = obj.args[0];
-            Node substitution = obj.args[1];
+            Node pattern;
+            Node substitution;
+            int priority;
+            // Priority not set: default zero
+            if (obj.val == "macro") {
+                pattern = obj.args[0];
+                substitution = obj.args[1];
+                priority = 0;
+            }
+            // Specified priority
+            else {
+                pattern = obj.args[1];
+                substitution = obj.args[2];
+                if (obj.args[0].args.size())
+                    priority = dtu(obj.args[0].args[0].val);
+                else
+                    priority = 0;
+            }
             if (opcode(pattern.val) < 0 && !isValidFunctionName(pattern.val))
                 valid = true;
             if (pattern.val == "set" &&
@@ -219,9 +359,17 @@ preprocessResult preprocessInit(Node inp) {
                     opcode(pattern.args[0].args[0].val) < 0 &&
                     !isValidFunctionName(pattern.args[0].args[0].val))
                 valid = true;
+            if (pattern.val == "with" &&
+                    opcode(pattern.args[0].val) < 0 &&
+                    !isValidFunctionName(pattern.args[0].val))
+                valid = true;
             if (valid) {
-                out.customMacros.push_back(rewriteRule(pattern, substitution));
+                if (!out.customMacros.count(priority))
+                    out.customMacros[priority] = rewriteRuleSet();
+                out.customMacros[priority].addRule
+                    (rewriteRule(pattern, substitution));
             }
+            else warn("Macro does not fit valid template: "+printSimple(pattern), m);
         }
         // Variable types
         else if (obj.val == "type") {
@@ -240,6 +388,7 @@ preprocessResult preprocessInit(Node inp) {
         }
         else any.push_back(obj);
     }
+    // Set up top-level AST structure
     std::vector<Node> main;
     if (shared.args.size()) main.push_back(shared);
     if (init.args.size()) main.push_back(init);
@@ -254,9 +403,9 @@ preprocessResult preprocessInit(Node inp) {
     if (functions.size() > 0) {
         codeNode = astnode("with",
                            token("__funid", m),
-                           astnode("byte",
-                                   token("0", m),
+                           astnode("div",
                                    astnode("calldataload", token("0", m), m),
+                                   astnode("exp", tkn("2", m), tkn("224", m)),
                                    m),
                            astnode("seq", code, m),
                            m);
@@ -280,11 +429,12 @@ preprocessResult preprocessInit(Node inp) {
 preprocessResult processTypes (preprocessResult pr) {
     preprocessAux aux = pr.second;
     Node node = pr.first;
-    if (node.type == TOKEN && aux.types.count(node.val)) {
+    if (node.type == TOKEN && aux.types.count(node.val))
         node = asn(aux.types[node.val], node, node.metadata);
-    }
     else if (node.val == "untyped")
         return preprocessResult(node.args[0], aux);
+    else if (node.val == "outer")
+        return preprocessResult(node, aux);
     else {
         for (unsigned i = 0; i < node.args.size(); i++) {
             node.args[i] =
@@ -296,4 +446,90 @@ preprocessResult processTypes (preprocessResult pr) {
 
 preprocessResult preprocess(Node n) {
     return processTypes(preprocessInit(n));
+}
+
+// Create the signature from a contract, usable for inclusion 
+// in other contracts
+std::string mkExternLine(Node n) {
+    preprocessResult pr = preprocess(flattenSeq(n));
+    std::vector<std::string> outNames;
+    std::vector<functionMetadata> outMetadata;
+    if (!pr.second.interns.size())
+        return "extern " + n.metadata.file + ": []";
+    for (std::map<std::string, functionMetadata>::iterator it=
+            pr.second.interns.begin();
+            it != pr.second.interns.end(); it++) {
+        if ((*it).first.find("::") == -1) {
+            outNames.push_back((*it).first);
+            outMetadata.push_back((*it).second);
+        }
+    }
+    std::string o = "extern " + n.metadata.file + ": [";
+    for (unsigned i = 0; i < outNames.size(); i++) {
+        o += outNames[i] + ":"
+           + outMetadata[i].sig
+           + (outMetadata[i].sig.size() ? "" : "_") + ":";
+        o += outMetadata[i].outType == "str" ? "s"
+           : outMetadata[i].outType == "arr" ? "a"
+           : outMetadata[i].outType == "int" ? "i"
+           :                                   "_";
+        
+        o += (i < outNames.size() - 1) ? ", " : "]"; 
+    }
+    return o;
+}
+
+// Create the full signature from a contract, usable for
+// inclusion in solidity contracts and javascript objects
+std::string mkFullExtern(Node n) {
+    preprocessResult pr = preprocess(flattenSeq(n));
+    std::vector<std::string> outNames;
+    std::vector<functionMetadata> outMetadata;
+    if (!pr.second.interns.size())
+        return "[]";
+    for (std::map<std::string, functionMetadata>::iterator it=
+            pr.second.interns.begin();
+            it != pr.second.interns.end(); it++) {
+        if ((*it).first.find("::") == -1) {
+            outNames.push_back((*it).first);
+            outMetadata.push_back((*it).second);
+        }
+    }
+    std::string o = "[";
+    for (unsigned i = 0; i < outNames.size(); i++) {
+        std::string summary = getSummary(outNames[i], outMetadata[i].sig);
+        o += "{\n    \"name\": \""+summary+"\",\n";
+        o += "    \"type\": \"function\",\n";
+        o += "    \"inputs\": [";
+        for (unsigned j = 0; j < outMetadata[i].sig.size(); j++) {
+            o += "{ \"name\": \""+outMetadata[i].argNames[j]+
+                 "\", \"type\": \""+typeMap(outMetadata[i].sig[j])+"\" }";
+            o += (j < outMetadata[i].sig.size() - 1) ? ", " : ""; 
+        }
+        o += "],\n    \"outputs\": [";
+        std::string t = outMetadata[i].outType;
+        if (t != "void") {
+            std::string name, type;
+            if (t == "str") { name = "out"; type = "string"; }
+            else if (t == "arr") { name = "out"; type = "int256[]"; }
+            else if (t == "int") { name = "out"; type = "int256"; }
+            else { name = "unknown_out"; type = "int256[]"; }
+            o += "{ \"name\": \""+name+"\", \"type\": \""+type+"\" }";
+        }
+        o += "]\n}";
+        o += ((i < outNames.size() - 1) ? ",\n" : "]"); 
+    }
+    return o;
+}
+
+std::vector<Node> getDataNodes(Node n) {
+    Metadata m = n.metadata;
+    if (n.val != "seq")
+        n = astnode("seq", n, m);
+    std::vector<Node> dataNodes;
+    for (unsigned i = 0; i < n.args.size(); i++) {
+        if (n.args[i].val == "data")
+            dataNodes.push_back(n.args[i]);
+    }
+    return dataNodes;
 }

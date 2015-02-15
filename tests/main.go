@@ -8,13 +8,13 @@ import (
 
 func main() {
 	out, _ := serpent.Compile(`
-// Namecoin
-if !contract.storage[msg.data[0]]: # Is the key not yet taken?
-    # Then take it!
-    contract.storage[msg.data[0]] = msg.data[1]
-    return(1)
-else:
-    return(0) // Otherwise do nothing
+def register(key, value):
+    # Key not yet claimed
+    if not self.storage[key]:
+        self.storage[key] = value
+        return(1)
+    else:
+        return(0)  # Key already claimed
 	`)
 
 	fmt.Printf("%x\n", out)

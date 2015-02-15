@@ -6,6 +6,7 @@
 #include "bignum.h"
 #include "opcodes.h"
 
+// Auxiliary data that is gathered while compiling
 struct programAux {
     std::map<std::string, std::string> vars;
     int nextVarMem;
@@ -15,6 +16,8 @@ struct programAux {
     int labelLength;
 };
 
+// Auxiliary data that gets passed down vertically
+// but not back up
 struct programVerticalAux {
     int height;
     std::string innerScopeName;
@@ -23,6 +26,7 @@ struct programVerticalAux {
     std::vector<mss> scopes;
 };
 
+// Compilation result
 struct programData {
     programAux aux;
     Node code;
@@ -73,43 +77,12 @@ Node popwrap(Node node) {
     return multiToken(nodelist, 2, node.metadata);
 }
 
-// Grabs variables
-mss getVariables(Node node, mss cur=mss()) {
-    Metadata m = node.metadata;
-    // Tokens don't contain any variables
-    if (node.type == TOKEN)
-        return cur;
-    // Don't descend into call fragments
-    else if (node.val == "lll")
-        return getVariables(node.args[1], cur);
-    // At global scope get/set/ref also declare    
-    else if (node.val == "get" || node.val == "set" || node.val == "ref") {
-        if (node.args[0].type != TOKEN)
-            err("Variable name must be simple token,"
-                " not complex expression!", m);
-        if (!cur.count(node.args[0].val)) {
-            cur[node.args[0].val] = utd(cur.size() * 32 + 32);
-            //std::cerr << node.args[0].val << " " << cur[node.args[0].val] << "\n";
-        }
-    }
-    // Recursively process children
-    for (unsigned i = 0; i < node.args.size(); i++) {
-        cur = getVariables(node.args[i], cur);
-    }
-    return cur;
-}
-
 // Turns LLL tree into tree of code fragments
 programData opcodeify(Node node,
                       programAux aux=Aux(),
                       programVerticalAux vaux=verticalAux()) {
     std::string symb = "_"+mkUniqueToken();
     Metadata m = node.metadata;
-    // Get variables
-    if (!aux.vars.size()) {
-        aux.vars = getVariables(node);
-        aux.nextVarMem = aux.vars.size() * 32 + 32;
-    }
     // Numbers
     if (node.type == TOKEN) {
         return pd(aux, nodeToNumeric(node), 1);
@@ -117,6 +90,10 @@ programData opcodeify(Node node,
     else if (node.val == "ref" || node.val == "get" || node.val == "set") {
         std::string varname = node.args[0].val;
         // Determine reference to variable
+        if (!aux.vars.count(node.args[0].val)) {
+            aux.vars[node.args[0].val] = utd(aux.nextVarMem);
+            aux.nextVarMem += 32;
+        }
         Node varNode = tkn(aux.vars[varname], m);
         //std::cerr << varname << " " << printSimple(varNode) << "\n";
         // Set variable
@@ -169,8 +146,7 @@ programData opcodeify(Node node,
     }
     // Comments do nothing
     else if (node.val == "comment") {
-        Node nodelist[] = { };
-        return pd(aux, multiToken(nodelist, 0, m), 0);
+        return pd(aux, astnode("_", m), 0);
     }
     // Custom operation sequence
     // eg. (ops bytez id msize swap1 msize add 0 swap1 mstore) == alloc
@@ -367,7 +343,7 @@ Node buildFragmentTree(Node node) {
 
 
 // Builds a dictionary mapping labels to variable names
-programAux buildDict(Node program, programAux aux, int labelLength) {
+void buildDict(Node program, programAux &aux, int labelLength) {
     Metadata m = program.metadata;
     // Token
     if (program.type == TOKEN) {
@@ -384,30 +360,24 @@ programAux buildDict(Node program, programAux aux, int labelLength) {
     }
     // A sub-program (ie. LLL)
     else if (program.val == "____CODE") {
-        programAux auks = Aux();
+        int step = aux.step;
+        aux.step = 0;
         for (unsigned i = 0; i < program.args.size(); i++) {
-            auks = buildDict(program.args[i], auks, labelLength);
+            buildDict(program.args[i], aux, labelLength);
         }
-        for (std::map<std::string,std::string>::iterator it=auks.vars.begin();
-             it != auks.vars.end();
-             it++) {
-            aux.vars[(*it).first] = (*it).second;
-        }
-        aux.step += auks.step;
+        aux.step += step;
     }
     // Normal sub-block
     else {
         for (unsigned i = 0; i < program.args.size(); i++) {
-            aux = buildDict(program.args[i], aux, labelLength);
+            buildDict(program.args[i], aux, labelLength);
         }
     }
-    return aux;
 }
 
 // Applies that dictionary
-Node substDict(Node program, programAux aux, int labelLength) {
+void substDict(Node program, programAux aux, int labelLength, std::vector<Node> &out) {
     Metadata m = program.metadata;
-    std::vector<Node> out;
     std::vector<Node> inner;
     if (program.type == TOKEN) {
         if (program.val[0] == '$') {
@@ -424,46 +394,32 @@ Node substDict(Node program, programAux aux, int labelLength) {
                             dist = decimalSub(end, start);
                 inner = toByteArr(dist, m, labelLength);
             }
-            out.push_back(astnode("_", inner, m));
+            for (unsigned i = 0; i < inner.size(); i++) out.push_back(inner[i]);
         }
         else if (program.val[0] == '~') { }
         else if (isNumberLike(program)) {
             inner = toByteArr(program.val, m);
             out.push_back(token("PUSH"+unsignedToDecimal(inner.size())));
-            out.push_back(astnode("_", inner, m));
+            for (unsigned i = 0; i < inner.size(); i++) out.push_back(inner[i]);
         }
-        else return program;
+        else  out.push_back(program);
     }
     else {
         for (unsigned i = 0; i < program.args.size(); i++) {
-            Node n = substDict(program.args[i], aux, labelLength);
-            if (n.type == TOKEN || n.args.size()) out.push_back(n);
+            substDict(program.args[i], aux, labelLength, out);
         }
     }
-    return astnode("_", out, m);
 }
 
 // Compiled fragtree -> compiled fragtree without labels
-Node dereference(Node program) {
+std::vector<Node> dereference(Node program) {
     int sz = treeSize(program) * 4;
     int labelLength = 1;
     while (sz >= 256) { labelLength += 1; sz /= 256; }
-    programAux aux = buildDict(program, Aux(), labelLength);
-    return substDict(program, aux, labelLength);
-}
-
-// Dereferenced fragtree -> opcodes
-std::vector<Node> flatten(Node derefed) {
+    programAux aux = Aux();
+    buildDict(program, aux, labelLength);
     std::vector<Node> o;
-    if (derefed.type == TOKEN) {
-        o.push_back(derefed);
-    }
-    else {
-        for (unsigned i = 0; i < derefed.args.size(); i++) {
-            std::vector<Node> oprime = flatten(derefed.args[i]);
-            for (unsigned j = 0; j < oprime.size(); j++) o.push_back(oprime[j]);
-        }
-    }
+    substDict(program, aux, labelLength, o);
     return o;
 }
 
@@ -508,12 +464,12 @@ std::vector<Node> deserialize(std::string ser) {
 
 // Fragtree -> bin
 std::string assemble(Node fragTree) {
-    return serialize(flatten(dereference(fragTree)));
+    return serialize(dereference(fragTree));
 }
 
 // Fragtree -> tokens
 std::vector<Node> prettyAssemble(Node fragTree) {
-    return flatten(dereference(fragTree));
+    return dereference(fragTree);
 }
 
 // LLL -> bin
@@ -524,31 +480,4 @@ std::string compileLLL(Node program) {
 // LLL -> tokens
 std::vector<Node> prettyCompileLLL(Node program) {
     return prettyAssemble(buildFragmentTree(program));
-}
-
-// Converts a list of integer values to binary transaction data
-std::string encodeDatalist(std::vector<std::string> vals) {
-    std::string o;
-    for (unsigned i = 0; i < vals.size(); i++) {
-        std::vector<Node> n = toByteArr(strToNumeric(vals[i]), Metadata(), 32);
-        for (unsigned j = 0; j < n.size(); j++) {
-            int v = decimalToUnsigned(n[j].val);
-            o += (char)v;
-        }
-    }
-    return o;
-}
-
-// Converts binary transaction data into a list of integer values
-std::vector<std::string> decodeDatalist(std::string ser) {
-    std::vector<std::string> out;
-    for (unsigned i = 0; i < ser.length(); i+= 32) {
-        std::string o = "0";
-		for (unsigned j = i; j < i + 32; j++) {
-            int vj = (int)(unsigned char)ser[j];
-            o = decimalAdd(decimalMul(o, "256"), unsignedToDecimal(vj));
-        }
-        out.push_back(o);
-    }
-    return out;
 }

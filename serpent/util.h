@@ -43,11 +43,12 @@ class Metadata {
 std::string mkUniqueToken();
 
 // type can be TOKEN or ASTNODE
-struct Node {
-    int type;
-    std::string val;
-    std::vector<Node> args;
-    Metadata metadata;
+class Node {
+    public:
+        int type;
+        std::string val;
+        std::vector<Node> args;
+        Metadata metadata;
 };
 Node token(std::string val, Metadata met=Metadata());
 Node astnode(std::string val, std::vector<Node> args, Metadata met=Metadata());
@@ -83,7 +84,7 @@ std::string indentLines(std::string inp);
 std::string binToNumeric(std::string inp);
 
 // Converts string to simple numeric format
-std::string strToNumeric(std::string inp);
+std::string strToNumeric(std::string inp, int strpad);
 
 // Does the node contain a number (eg. 124, 0xf012c, "george")
 bool isNumberLike(Node node);
@@ -106,6 +107,9 @@ bool exists(std::string fileName);
 //Report error
 void err(std::string errtext, Metadata met);
 
+//Report warning
+void warn(std::string errtext, Metadata met);
+
 //Bin to hex
 std::string binToHex(std::string inp);
 
@@ -118,10 +122,40 @@ std::string upperCase(std::string inp);
 //Three-int vector
 std::vector<int> triple(int a, int b, int c);
 
+//Extend node vector
+std::vector<Node> extend(std::vector<Node> a, std::vector<Node> b);
+
+// Is the number decimal?
+bool isDecimal(std::string inp);
+
 #define asn astnode
 #define tkn token
 #define msi std::map<std::string, int>
 #define msn std::map<std::string, Node>
 #define mss std::map<std::string, std::string>
+#define strvec std::vector<std::string>
+
+template <typename T, typename U>
+class create_map
+{
+private:
+    std::map<T, U> m_map;
+public:
+    create_map(const T& key, const U& val)
+    {
+        m_map[key] = val;
+    }
+
+    create_map<T, U>& operator()(const T& key, const U& val)
+    {
+        m_map[key] = val;
+        return *this;
+    }
+
+    operator std::map<T, U>()
+    {
+        return m_map;
+    }
+};
 
 #endif

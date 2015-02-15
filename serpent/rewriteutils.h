@@ -14,6 +14,10 @@ extern std::map<std::string, bool> vfMap;
 
 bool isValidFunctionName(std::string f);
 
+// Invalid variable names
+
+extern std::map<std::string, bool> reservedWords;
+
 // Converts deep array access into ordered list of the arguments
 // along the descent
 std::vector<Node> listfyStorageAccess(Node node);
@@ -47,5 +51,31 @@ Node subst(Node pattern,
            Metadata m);
 
 Node withTransform(Node source);
+
+class rewriteRule {
+    public:
+        rewriteRule(Node p, Node s) {
+            pattern = p;
+            substitution = s;
+        }
+        Node pattern;
+        Node substitution;
+};
+
+class rewriteRuleSet {
+    public:
+        rewriteRuleSet() {
+            ruleLists = std::map<std::string, std::vector<rewriteRule> >();
+        }
+        void addRule(rewriteRule r) {
+            if (!ruleLists.count(r.pattern.val))
+                ruleLists[r.pattern.val] = std::vector<rewriteRule>();
+            ruleLists[r.pattern.val].push_back(r);
+        }
+        std::map<std::string, std::vector<rewriteRule> > ruleLists;
+};
+
+// Flatten nested sequence into flat sequence
+Node flattenSeq(Node inp);
 
 #endif
