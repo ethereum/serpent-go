@@ -37,13 +37,21 @@ std::string validFunctions[][3] = {
     { "with", "3", "3" },
     { "outer", "1", "1" },
     { "mcopy", "3", "3" },
-    { "unsafe_mcopy", "3", "3" },
     { "save", "3", "3" },
     { "load", "2", "2" },
     { "---END---", "", "" } //Keep this line at the end of the list
 };
 
 std::map<std::string, bool> vfMap;
+
+std::map<std::string, bool> reservedWords = create_map<std::string,bool>
+    ("arr", true)
+    ("str", true)
+    ("chars", true)
+    ("bytes", true)
+    ("items", true)
+    ("words", true)
+    ("string", true);
 
 // Is a function name one of the valid functions above?
 bool isValidFunctionName(std::string f) {
@@ -208,4 +216,24 @@ Node withTransform (Node source) {
     if (o.val != "--")
         flipargs.push_back(o);
     return asn("seq", flipargs, m);
+}
+
+// Flatten nested sequence into flat sequence
+Node flattenSeq(Node inp) {
+    std::vector<Node> o;
+    if (inp.val == "seq" && inp.type == ASTNODE) {
+        for (unsigned i = 0; i < inp.args.size(); i++) {
+            if (inp.args[i].val == "seq" && inp.args[i].type == ASTNODE)
+                o = extend(o, flattenSeq(inp.args[i]).args);
+            else
+                o.push_back(flattenSeq(inp.args[i]));
+        }
+    }
+    else if (inp.type == ASTNODE) {
+        for (unsigned i = 0; i < inp.args.size(); i++) {
+            o.push_back(flattenSeq(inp.args[i]));
+        }
+    }
+    else return inp;
+    return asn(inp.val, o, inp.metadata);
 }

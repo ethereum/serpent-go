@@ -3,8 +3,8 @@
 ## Build instructions
 
 ```
-go get -d github.com/ethereum/serpent-go
-cd $GOPATH/src/github.com/ethereum/serpent-go
+go get -d github.com/tendermint/serpent-go
+cd $GOPATH/src/github.com/tendermint/serpent-go
 git submodule init
 git submodule update
 ```

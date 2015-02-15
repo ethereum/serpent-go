@@ -1,8 +1,7 @@
 import serpent_pyext as pyext
-import sys
-import re
+import sys, re
 
-VERSION = '1.7.7'
+VERSION = '1.8.0'
 
 
 class Metadata(object):
@@ -72,18 +71,17 @@ def takelist(x):
 
 
 compile = lambda x: pyext.compile(x)
-compile_chunk = lambda x: pyext.compile_chunk(x)
 compile_to_lll = lambda x: node(pyext.compile_to_lll(x))
-compile_chunk_to_lll = lambda x: node(pyext.compile_chunk_to_lll(x))
 compile_lll = lambda x: pyext.compile_lll(take(x))
 parse = lambda x: node(pyext.parse(x))
 rewrite = lambda x: node(pyext.rewrite(take(x)))
-rewrite_chunk = lambda x: node(pyext.rewrite_chunk(take(x)))
 pretty_compile = lambda x: map(node, pyext.pretty_compile(x))
-pretty_compile_chunk = lambda x: map(node, pyext.pretty_compile_chunk(x))
 pretty_compile_lll = lambda x: map(node, pyext.pretty_compile_lll(take(x)))
 serialize = lambda x: pyext.serialize(takelist(x))
 deserialize = lambda x: map(node, pyext.deserialize(x))
+mk_signature = lambda x: pyext.mk_signature(x)
+mk_full_signature = lambda x: pyext.mk_full_signature(x)
+get_prefix = lambda x, y: pyext.get_prefix(x, y) % 2**32
 
 is_numeric = lambda x: isinstance(x, (int, long))
 is_string = lambda x: isinstance(x, (str, unicode))
@@ -101,42 +99,44 @@ def fromhex(b):
     return 0 if len(b) == 0 else hexord(b[-1]) + 16 * fromhex(b[:-1])
 
 
-def numberize(b):
-    if is_numeric(b):
-        return b
-    elif b[0] in ["'", '"']:
-        return frombytes(b[1:-1])
-    elif b[:2] == '0x':
-        return fromhex(b[2:])
-    elif re.match('^[0-9]*$', b):
-        return int(b)
-    elif len(b) == 40:
-        return fromhex(b)
-    else:
-        raise Exception("Cannot identify data type: %r" % b)
-
-
 def enc(n):
-    if is_numeric(n):
-        return ''.join(map(chr, tobytearr(n, 32)))
+    if is_numeric(n) and n < 2**256 and n > -2**255:
+        return ''.join(map(chr, tobytearr(n % 2**256, 32)))
+    elif is_numeric(n):
+        raise Exception("Number out of range: %r" % n)
     elif is_string(n) and len(n) == 40:
         return '\x00' * 12 + n.decode('hex')
-    elif is_string(n):
+    elif is_string(n) and len(n) <= 32:
         return '\x00' * (32 - len(n)) + n
+    elif is_string(n) and len(n) > 32:
+        raise Exception("String too long: %r" % n)
     elif n is True:
         return 1
     elif n is False or n is None:
         return 0
+    else:
+        raise Exception("Cannot encode integer: %r" % n)
+
+
+def cmdline_enc(n):
+    if n[:2] == '0x':
+        o = int(n[2:], 16)
+    elif re.match('^[0-9]*$', n):
+        o = int(n)
+    elif len(n) == 40:
+        o = n
+    else:
+        raise Exception("Cannot encode integer: %r" % n)
+    return enc(o)
+
+
+def list_dec(l):
+    assert l[0] == '[' and l[-1] == ']'
+    return [cmdline_enc(x.strip()) for x in l[1:-1].split(',')]
 
 
 def encode_datalist(*args):
-    if isinstance(args, (tuple, list)):
-        return ''.join(map(enc, args))
-    elif not len(args) or args[0] == '':
-        return ''
-    else:
-        # Assume you're getting in numbers or addresses or 0x...
-        return ''.join(map(enc, map(numberize, args)))
+    raise Exception("Encode datalist deprecated")
 
 
 def decode_datalist(arr):
@@ -148,22 +148,9 @@ def decode_datalist(arr):
     return o
 
 
-def encode_abi(funid, *args):
-    len_args = ''
-    normal_args = ''
-    var_args = ''
-    for arg in args:
-        if isinstance(arg, str) and len(arg) and \
-                arg[0] == '"' and arg[-1] == '"':
-            len_args += enc(numberize(len(arg[1:-1])))
-            var_args += arg[1:-1]
-        elif isinstance(arg, list):
-            for a in arg:
-                var_args += enc(numberize(a))
-            len_args += enc(numberize(len(arg)))
-        else:
-            normal_args += enc(numberize(arg))
-    return chr(int(funid)) + len_args + normal_args + var_args
+def encode_abi(function_name, sig, *args, **kwargs):
+    raise Exception("encode_abi deprecated, please use "
+                    "the methods in pyethereum.abi")
 
 
 def decode_abi(arr, *lens):
@@ -192,10 +179,15 @@ def main():
         else:
             cmd = sys.argv[1]
             args = sys.argv[2:]
+        kwargs = {}
         if cmd in ['deserialize', 'decode_datalist', 'decode_abi']:
             args[0] = args[0].strip().decode('hex')
-        o = globals()[cmd](*args)
+        if cmd in ['encode_abi']:
+            kwargs['source'] = 'cmdline'
+        o = globals()[cmd](*args, **kwargs)
         if isinstance(o, (Token, Astnode, list)):
             print repr(o)
+        elif cmd in ['mk_signature', 'mk_full_signature', 'get_prefix']:
+            print o
         else:
             print o.encode('hex')

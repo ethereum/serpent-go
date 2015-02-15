@@ -78,12 +78,28 @@ std::string macros[][2] = {
         "$code"
     },
     {
-        "(slice $arr $pos)",
-        "(add $arr (mul 32 $pos))",
+        "(array $len)",
+        "(with $l $len (with $x (alloc (add 32 (mul 32 $l))) (seq (mstore $x $l) (add $x 32))))"
     },
     {
-        "(array $len)",
-        "(alloc (mul 32 $len))"
+        "(string $len)",
+        "(with $l $len (with $x (alloc (add 32 $l)) (seq (mstore $x $l) (add $x 32))))"
+    },
+    {
+        "(shrink $arr $sz)",
+        "(mstore (sub $arr 32) $sz)"
+    },
+    {
+        "(slice $arr (= items $start) (= items $end))",  
+        "(with _s $start (with _l (sub $end _s) (with _a (array _l) (seq (mcopy _a (add $arr (mul 32 _s)) (mul 32 _l)) _a))))"
+    },
+    {
+        "(slice $arr (= chars $start) (= chars $end))",  
+        "(with _s $start (with _l (sub $end _s) (with _a (string _l) (seq (mcopy _a (add $arr _s) _l) _a))))"
+    },
+    {
+        "(len $x)",
+        "(mload (sub $x 32))"
     },
     {
         "(while $cond $do)",
@@ -114,6 +130,10 @@ std::string macros[][2] = {
         "(sstore $ind $val)"
     },
     {
+        "(set (sload $ind) $val)",
+        "(sstore $ind $val)"
+    },
+    {
         "(set (access $var $ind) $val)",
         "(mstore (add $var (mul 32 $ind)) $val)"
     },
@@ -123,7 +143,7 @@ std::string macros[][2] = {
     },
     {
         "(setch $var $ind $val)",
-        "(mstore8 (add $var $ind) $val)",
+        "(mstore8 (add $var $ind) (or (byte 0 $val) (byte 31 $val)))",
     },
     {
         "(send $to $value)",
@@ -134,32 +154,28 @@ std::string macros[][2] = {
         "(~call $gas $to $value 0 0 0 0)"
     },
     {
-        "(sha3 $x)",
-        "(seq (set $1 $x) (~sha3 (ref $1) 32))"
-    },
-    {
-        "(sha3 $mstart (= chars $msize))",
-        "(~sha3 $mstart $msize)"
-    },
-    {
-        "(sha3 $mstart $msize)",
-        "(~sha3 $mstart (mul 32 $msize))"
-    },
-    {
         "(id $0)",
         "$0"
     },
     {
+        "(return (: $x arr))",
+        "(with $0 $x (~return (sub $0 32) (add 32 (= items (mload (sub $0 32))))))"
+    },
+    {
+        "(return (: $x str))",
+        "(with $0 $x (~return (sub $0 32) (add 32 (= chars (mload (sub $0 32))))))"
+    },
+    {
+        "(return $arr (= $type $sz))",
+        "(with _size $sz (seq (mstore (sub $arr 32) _size) (~return (sub $arr 32) (add (= $type $sz) 32))))"
+    },
+    {
+        "(return $arr $sz)",
+        "(error \"when returning you must do return(x) for values, return(x:arr) for arrays or return(x:str) for strings; return(arr, len) by itself is no longer valid. Uses of return(arr, len) should be substituted with return(arr, items=len) or ideally actual arrays.\")"
+    },
+    {
         "(return $x)",
         "(seq (set $1 $x) (~return (ref $1) 32))"
-    },
-    {
-        "(return $mstart (= chars $msize))",
-        "(~return $mstart $msize)"
-    },
-    {
-        "(return $start $len)",
-        "(~return $start (mul 32 $len))"
     },
     {
         "(&& $x $y)",
@@ -183,31 +199,87 @@ std::string macros[][2] = {
     },
     {
         "(create $endowment $code)",
-        "(with $1 (msize) (create $endowment (get $1) (lll (outer $code) (msize))))"
+        "(with $1 (msize) (create $endowment (get $1) (lll $code (msize))))"
+    },
+    {
+        "(sha3 (: $x arr))",
+        "(with $0 $x (~sha3 $0 (= items (mload (sub $0 32)))))"
+    },
+    {
+        "(sha3 (: $x str))",
+        "(with $0 $x (~sha3 $0 (= chars (mload (sub $0 32)))))"
+    },
+    {
+        "(sha3 $arr (= $type $sz))",
+        "(~sha3 $arr (= $type $sz))"
+    },
+    {
+        "(sha3 $arr $sz)",
+        "(error \"when hashing you must do sha3(x) for values, sha3(arr, items=len) for arrays or sha3(arr, chars=len) for strings; sha3(arr, len) by itself is no longer valid\")"
+    },
+    {
+        "(sha3 $x)",
+        "(seq (set $1 $x) (~sha3 (ref $1) 32))"
+    },
+    {
+        "(sha256 (: $x arr))",
+        "(with $0 $x (_sha256 $0 (= items (mload (sub $0 32)))))"
+    },
+    {
+        "(sha256 (: $x str))",
+        "(with $0 $x (_sha256 $0 (= chars (mload (sub $0 32)))))"
+    },
+    {
+        "(sha256 $arr (= $type $sz))",
+        "(_sha256 $arr (= $type $sz))"
+    },
+    {
+        "(sha256 (: $x str))",
+        "(with $0 $x (_sha256 $0 (= chars (mload (sub $0 32)))))"
     },
     {
         "(sha256 $x)",
-        "(with $1 (alloc 64) (seq (mstore (add (get $1) 32) $x) (pop (~call 101 2 0 (add (get $1) 32) 32 (get $1) 32)) (mload (get $1))))"
+        "(seq (set $1 $x) (_sha256 (ref $1) (= items 1)))",
     },
     {
-        "(sha256 $arr (= chars $sz))",
-        "(with $1 (alloc 32) (seq (pop (~call 101 2 0 $arr $sz (get $1) 32)) (mload (get $1))))"
+        "(_sha256 $arr $sz)",
+        "(with $0 $sz (with $1 (alloc 32) (seq (pop (~call (add 100 (mul 2 $0)) 2 0 $arr $0 (get $1) 32)) (mload (get $1)))))"
     },
     {
         "(sha256 $arr $sz)",
-        "(with $1 (alloc 32) (seq (pop (~call 101 2 0 $arr (mul 32 $sz) (get $1) 32)) (mload (get $1))))"
+        "(error \"when hashing you must do sha256(x) for values, sha256(arr, items=len) for arrays or sha256(arr, chars=len) for strings; sha256(arr, len) by itself is no longer valid\")"
+    },
+    {
+        "(ripemd160 (: $x arr))",
+        "(with $0 $x (_ripemd160 $0 (= items (mload (sub $0 32)))))"
+    },
+    {
+        "(ripemd160 (: $x str))",
+        "(with $0 $x (_ripemd160 $0 (= chars (mload (sub $0 32)))))"
+    },
+    {
+        "(ripemd160 $arr (= $type $sz))",
+        "(_ripemd160 $arr (= $type $sz))"
     },
     {
         "(ripemd160 $x)",
-        "(with $1 (alloc 64) (seq (mstore (add (get $1) 32) $x) (pop (~call 101 3 0 (add (get $1) 32) 32 (get $1) 32)) (mload (get $1))))"
+        "(seq (set $1 $x) (_ripemd160 (ref $1) (= items 1)))",
     },
     {
-        "(ripemd160 $arr (= chars $sz))",
-        "(with $1 (alloc 32) (seq (pop (~call 101 3 0 $arr $sz (mload $1) 32)) (mload (get $1))))"
+        "(_ripemd160 $arr $sz)",
+        "(with $0 $sz (with $1 (alloc 32) (seq (pop (~call (add 100 (mul 2 $0)) 3 0 $arr $0 (get $1) 32)) (mload (get $1)))))"
     },
     {
         "(ripemd160 $arr $sz)",
-        "(with $1 (alloc 32) (seq (pop (~call 101 3 0 $arr (mul 32 $sz) (get $1) 32)) (mload (get $1))))"
+        "(error \"when hashing you must do ripemd(x) for values, ripemd160(arr, items=len) for arrays or ripemd160(arr, chars=len) for strings; ripemd160(arr, len) by itself is no longer valid\")"
+    },
+    {
+        "(set chars $x)",
+        "$x",
+    },
+    {
+        "(set items $x)",
+        "(mul $x 32)",
     },
     {
         "(ecrecover $h $v $r $s)",
@@ -226,64 +298,40 @@ std::string macros[][2] = {
         "(with $var $val $cond)"
     },
     {
-        "(log $t1)",
-        "(~log1 0 0 $t1)"
+        "(save $loc (: $array arr))",
+        "(with $0 $array (save $loc $0 (= items (len $0))))"
     },
     {
-        "(log $t1 $t2)",
-        "(~log2 0 0 $t1 $t2)"
+        "(save $loc (: $string str))",
+        "(with $0 $string (save $loc $0 (= chars (len $0))))"
     },
     {
-        "(log $t1 $t2 $t3)",
-        "(~log3 0 0 $t1 $t2 $t3)"
-    },
-    {
-        "(log $t1 $t2 $t3 $t4)",
-        "(~log4 0 0 $t1 $t2 $t3 $t4)"
-    },
-    {
-        "(logarr $a $sz)",
-        "(~log0 $a (mul 32 $sz))"
-    },
-    {
-        "(logarr $a $sz $t1)",
-        "(~log1 $a (mul 32 $sz) $t1)"
-    },
-    {
-        "(logarr $a $sz $t1 $t2)",
-        "(~log2 $a (mul 32 $sz) $t1 $t2)"
-    },
-    {
-        "(logarr $a $sz $t1 $t2 $t3)",
-        "(~log3 $a (mul 32 $sz) $t1 $t2 $t3)"
-    },
-    {
-        "(logarr $a $sz $t1 $t2 $t3 $t4)",
-        "(~log4 $a (mul 32 $sz) $t1 $t2 $t3 $t4)"
-    },
-    {
-        "(save $loc $array (= chars $count))",
-        "(with $location (ref $loc) (with $c $count (with $end (div $c 32) (with $i 0 (seq (while (slt $i $end) (seq (sstore (add $i $location) (access $array $i)) (set $i (add $i 1)))) (sstore (add $i $location) (~and (access $array $i) (sub 0 (exp 256 (sub 32 (mod $c 32)))))))))))"
-    },
-    {
-        "(save $loc $array $count)",
+        "(save $loc $array (= items $count))",
         "(with $location (ref $loc) (with $end $count (with $i 0 (while (slt $i $end) (seq (sstore (add $i $location) (access $array $i)) (set $i (add $i 1)))))))"
     },
     {
-        "(load $loc (= chars $count))",
-        "(with $location (ref $loc) (with $c $count (with $a (alloc $c) (with $i 0 (seq (while (slt $i (div $c 32)) (seq (set (access $a $i) (sload (add $location $i))) (set $i (add $i 1)))) (set (access $a $i) (~and (sload (add $location $i)) (sub 0 (exp 256 (sub 32 (mod $c 32)))))) $a)))))"
+        "(save $loc $array $count)",
+        "(with $location (ref $loc) (with $c $count (with $end (div $c 32) (with $i 0 (seq (while (slt $i $end) (seq (sstore (add $i $location) (access $array $i)) (set $i (add $i 1)))) (sstore (add $i $location) (~and (access $array $i) (sub 0 (exp 256 (sub 32 (mod $c 32)))))))))))"
+    },
+    {
+        "(load $loc (= items $count))",
+        "(with $location (ref $loc) (with $c $count (with $a (array $c) (with $i 0 (seq (while (slt $i $c) (seq (set (access $a $i) (sload (add $location $i))) (set $i (add $i 1)))) $a)))))"
     },
     {
         "(load $loc $count)",
-        "(with $location (ref $loc) (with $c $count (with $a (alloc $c) (with $i 0 (seq (while (slt $i $c) (seq (set (access $a $i) (sload (add $location $i))) (set $i (add $i 1)))) $a)))))"
+        "(with $location (ref $loc) (with $c $count (with $a (string $c) (with $i 0 (seq (while (slt $i (div $c 32)) (seq (set (access $a $i) (sload (add $location $i))) (set $i (add $i 1)))) (set (access $a $i) (~and (sload (add $location $i)) (sub 0 (exp 256 (sub 32 (mod $c 32)))))) $a)))))"
     },
     {
-        "(unsafe_mcopy $to $from $sz)",
-        "(with _sz $sz (with _from $from (with _to $to (seq (comment STARTING UNSAFE MCOPY) (with _i 0 (while (lt _i _sz) (seq (mstore (add $to _i) (mload (add _from _i))) (set _i (add _i 32)))))))))"
+        "(safe_call $gas $to $value $datain $datainsz $dataout $dataoutsz)",
+        "(unless (~call $gas $to $value $datain $datainsz $dataout $dataoutsz) (invalid))"
     },
     {
-        "(mcopy $to $from $_sz)",
-        "(with _to $to (with _from $from (with _sz $sz (seq (comment STARTING MCOPY (with _i 0 (seq (while (lt (add _i 31) _sz) (seq (mstore (add _to _i) (mload (add _from _i))) (set _i (add _i 32)))) (with _mask (exp 256 (sub 32 (mod _sz 32))) (mstore (add $to _i) (add (mod (mload (add $to _i)) _mask) (and (mload (add $from _i)) (sub 0 _mask))))))))))))"
+        "(mcopy $to $from $sz)",
+        "(with _sz $sz (safe_call (+ 2 (/ _sz 32)) 4 0 $from _sz $to _sz))"
+    },
+    {
+        "(waste $n)",
+        "(with _n $n (call _n 2 0 0 _n 0 0))"
     },
     { "(. msg sender)", "(caller)" },
     { "(. msg value)", "(callvalue)" },
@@ -292,7 +340,8 @@ std::string macros[][2] = {
     { "(. tx gas)", "(gas)" },
     { "(. $x balance)", "(balance $x)" },
     { "self", "(address)" },
-    { "(. block prevhash)", "(prevhash)" },
+    { "(. block prevhash)", "(blockhash (sub (number) 1))" },
+    { "(fun (. block prevhash) $n)", "(blockhash (sub (number) $n))" },
     { "(. block coinbase)", "(coinbase)" },
     { "(. block timestamp)", "(timestamp)" },
     { "(. block number)", "(number)" },
@@ -301,8 +350,6 @@ std::string macros[][2] = {
     { "stop", "(stop)" },
     { "---END---", "" } //Keep this line at the end of the list
 };
-
-std::vector<rewriteRule> nodeMacros;
 
 // Token synonyms
 std::string synonyms[][2] = {
@@ -314,7 +361,6 @@ std::string synonyms[][2] = {
     { "!", "iszero" },
     { "~", "~not" },
     { "not", "iszero" },
-    { "string", "alloc" },
     { "+", "add" },
     { "-", "sub" },
     { "*", "mul" },
@@ -330,6 +376,8 @@ std::string synonyms[][2] = {
     { "---END---", "" } //Keep this line at the end of the list
 };
 
+std::map<std::string, std::string> synonymMap;
+
 // Custom setters (need to be registered separately
 // for use with managed storage)
 std::string setters[][2] = {
@@ -342,17 +390,91 @@ std::string setters[][2] = {
     { "---END---", "" } //Keep this line at the end of the list
 };
 
-// Processes mutable array literals
+std::map<std::string, std::string> setterMap;
+
+
+// processes mutable array literals
 Node array_lit_transform(Node node) {
     std::string prefix = "_temp"+mkUniqueToken() + "_";
     Metadata m = node.metadata;
     std::map<std::string, Node> d;
-    std::string o = "(seq (set $arr (alloc "+utd(node.args.size()*32)+"))";
+    std::string o = "(with $arr (alloc "+utd(node.args.size()*32+32)+")";
+    o +=     " (seq (mstore (get $arr) "+utd(node.args.size())+")";
     for (unsigned i = 0; i < node.args.size(); i++) {
-        o += " (mstore (add (get $arr) "+utd(i * 32)+") $"+utd(i)+")";
+        o += " (mstore (add (get $arr) "+utd(i * 32 + 32)+") $"+utd(i)+")";
         d[utd(i)] = node.args[i];
     }
-    o += " (get $arr))";
+    o += " (add (get $arr) 32)))";
+    return subst(parseLLL(o), d, prefix, m);
+}
+
+Node log_transform(Node node) {
+    Metadata m = node.metadata;
+    std::vector<Node> topics;
+    Node data;
+    bool usingData = false;
+    bool isDataString = false;
+    for (unsigned i = 0; i < node.args.size(); i++) {
+        if (node.args[i].val == "=") {
+            std::string v = node.args[i].args[0].val;
+            if (v == "data" || v == "datastr" || v == "dataarr") {
+                data = node.args[i].args[1];
+                usingData = true;
+                isDataString = (v == "datastr");
+            }
+        }
+        else topics.push_back(node.args[i]);
+    }
+    if (topics.size() > 4) err("Too many topics!", m);
+    std::vector<Node> out;
+    if (usingData) {
+        out.push_back(tkn("_datarr", m));
+        out.push_back(isDataString
+            ? asn("len", tkn("_datarr", m), m)
+            : asn("mul", tkn("32", m), asn("len", tkn("_datarr", m), m)));
+    }
+    else {
+        out.push_back(tkn("0", m));
+        out.push_back(tkn("0", m));
+    }
+    std::string t = utd(topics.size());
+    for (unsigned i = 0; i < topics.size(); i++)
+        out.push_back(topics[i]);
+    if (usingData)
+        return asn("with", tkn("_datarr", m), data, asn("~log"+t, out, m), m);
+    else
+        return asn("~log"+t, out, m);
+}
+ 
+
+// Processes long text literals
+Node string_transform(Node node) {
+    std::string prefix = "_temp"+mkUniqueToken() + "_";
+    Metadata m = node.metadata;
+    if (!node.args.size())
+        err("Empty text!", m);
+    if (node.args[0].val.size() < 2 
+     || node.args[0].val[0] != '"'
+     || node.args[0].val[node.args[0].val.size() - 1] != '"')
+        err("Text contents don't look like a string: "+node.args[0].val, m);
+    std::string bin = node.args[0].val.substr(1, node.args[0].val.size() - 2);
+    unsigned sz = bin.size();
+    std::map<std::string, Node> d;
+    std::string o = "(with $str (alloc "+utd(bin.size() + 32)+")";
+    o += " (seq (mstore (get $str) "+utd(bin.size())+")";
+    for (unsigned i = 0; i < sz; i += 32) {
+        unsigned curpos = i;
+        std::string t = binToNumeric(bin.substr(i, 32));
+        if ((sz - i) < 32 && (sz - i) > 0) {
+            while ((sz - i) < 32) {
+                t = decimalMul(t, "256");
+                i--;
+            }
+            i = sz;
+        }
+        o += " (mstore (add (get $str) "+utd(curpos + 32)+") "+t+")";
+    }
+    o += " (add (get $str) 32)))";
     return subst(parseLLL(o), d, prefix, m);
 }
 
@@ -366,12 +488,21 @@ Node dotTransform(Node node, preprocessAux aux) {
     // We're gonna make lots of temporary variables,
     // so set up a unique flag for them
     std::string prefix = "_temp"+mkUniqueToken()+"_";
-    // Check that the function name is a token
-    if (node.args[0].args[1].type == ASTNODE)
-        err("Function name must be static", m);
-
-    Node dotOwner = node.args[0].args[0];
-    std::string dotMember = node.args[0].args[1].val;
+    // Determine the callee and the name of the function we are calling
+    Node callee = node.args[0].args[0];
+    Node funNode = node.args[0].args[1];
+    std::string functionName;
+    if (funNode.val == "::") {
+        if (funNode.args[0].type == ASTNODE
+                || funNode.args[1].type == ASTNODE)
+            err("Function name must be a token: "+printSimple(funNode), m);
+        functionName = funNode.args[0].val + "::" + funNode.args[1].val;
+    }
+    else {
+        if (funNode.type == ASTNODE)
+            err("Function name must be a token: "+printSimple(funNode), m);
+        functionName = funNode.val;
+    }
     // kwargs = map of special arguments
     std::map<std::string, Node> kwargs;
     kwargs["value"] = token("0", m);
@@ -379,62 +510,84 @@ Node dotTransform(Node node, preprocessAux aux) {
     // Search for as=? and call=code keywords, and isolate the actual
     // function arguments
     std::vector<Node> fnargs;
-    std::string as = "";
     std::string op = "call";
     for (unsigned i = 1; i < node.args.size(); i++) {
         fnargs.push_back(node.args[i]);
         Node arg = fnargs.back();
         if (arg.val == "=" || arg.val == "set") {
             if (arg.args[0].val == "as")
-                as = arg.args[1].val;
+                err("As keyword deprecated. To disambiguate overloaded "
+                    "definitions, use the foo::sig syntax instead", m);
             if (arg.args[0].val == "call" && arg.args[1].val == "code")
                 op = "callcode";
             if (arg.args[0].val == "gas")
                 kwargs["gas"] = arg.args[1];
             if (arg.args[0].val == "value")
                 kwargs["value"] = arg.args[1];
-            if (arg.args[0].val == "outsz")
-                kwargs["outsz"] = arg.args[1];
+            if (arg.args[0].val == "outitems" || arg.args[0].val == "outsz")
+                kwargs["outitems"] = arg.args[1];
+            if (arg.args[0].val == "outchars")
+                kwargs["outchars"] = arg.args[1];
         }
     }
-    if (dotOwner.val == "self") {
-        if (as.size()) err("Cannot use \"as\" when calling self!", m);
-        as = dotOwner.val;
-    }
-    // Determine the funId and sig assuming the "as" keyword was used
-    int funId = 0;
+    int functionPrefix = 0;
     std::string sig;
-    if (as.size() > 0 && aux.localExterns.count(as)) {
-        if (!aux.localExterns[as].count(dotMember))
-            err("Invalid call: "+printSimple(dotOwner)+"."+dotMember, m);
-        funId = aux.localExterns[as][dotMember];
-        sig = aux.localExternSigs[as][dotMember];
+    std::string outType;
+    // Determine the functionPrefix and sig if calling self
+    if (callee.val == "self") {
+        if (!aux.interns.count(functionName))
+            err("Invalid call: "+functionName, m);
+        functionPrefix = aux.interns[functionName].id;
+        sig = aux.interns[functionName].sig;
+        outType = aux.interns[functionName].outType;
     }
     // Determine the funId and sig otherwise
-    else if (!as.size()) {
-        if (!aux.globalExterns.count(dotMember))
-            err("Invalid call: "+printSimple(dotOwner)+"."+dotMember, m);
-        std::string key = unsignedToDecimal(aux.globalExterns[dotMember]);
-        funId = aux.globalExterns[dotMember];
-        sig = aux.globalExternSigs[dotMember];
+    else {
+        if (!aux.externs.count(functionName))
+            err("Invalid call: "+functionName, m);
+        if (aux.externs[functionName].ambiguous)
+            err("Ambiguous call: "+functionName+". Please use the "
+                "functionName::sig(...) syntax to specify the signature "
+                "of the function you are using.", m);
+        std::string key = unsignedToDecimal(aux.externs[functionName].id);
+        functionPrefix = aux.externs[functionName].id;
+        sig = aux.externs[functionName].sig;
+        outType = aux.externs[functionName].outType;
     }
-    else err("Invalid call: "+printSimple(dotOwner)+"."+dotMember, m);
+    // Type checks
+    if (outType == "int" && (kwargs.count("outitems") || kwargs.count("outchars")))
+        err("Expecting int/addr/short-string output; "
+            "outitems or outchars keywords not valid", m);
+    if (outType == "str" && kwargs.count("outitems"))
+        err("Expecting string, use outchars instead of outitems", m);
+    if (outType == "str" && !kwargs.count("outchars"))
+        err("Please specify maximum string length with outchars", m);
+    if (outType == "arr" && kwargs.count("outchars"))
+        err("Expecting array, use outitems instead of outchars", m);
+    if (outType == "arr" && !kwargs.count("outitems"))
+        err("Please specify maximum array length with outitems", m);
     // Pack arguments
-    kwargs["data"] = packArguments(fnargs, sig, funId, m);
-    kwargs["to"] = dotOwner;
+    kwargs["data"] = packArguments(fnargs, sig, functionPrefix, m);
+    kwargs["to"] = callee;
     Node main;
     // Pack output
-    if (!kwargs.count("outsz")) {
+    if (!kwargs.count("outitems") && !kwargs.count("outchars")) {
         main = parseLLL(
             "(with _data $data (seq "
                 "(pop (~"+op+" $gas $to $value (access _data 0) (access _data 1) (ref $dataout) 32))"
                 "(get $dataout)))");
     }
+    else if (kwargs.count("outchars")) {
+        main = parseLLL(
+            "(with _data $data (with _outchars $outchars (with _out (string _outchars) (seq "
+                "(pop (~"+op+" $gas $to $value (access _data 0) (access _data 1) _out (add 32 _outchars)))"
+                "(add (get _out) 32)))))");
+    }
     else {
         main = parseLLL(
-            "(with _data $data (with _outsz (mul 32 $outsz) (with _out (alloc _outsz) (seq "
-                "(pop (~"+op+" $gas $to $value (access _data 0) (access _data 1) _out _outsz))"
-                "(get _out)))))");
+            "(with _data $data (with _outitems $outitems (with _out (array _outitems) (seq "
+                "(pop (~"+op+" $gas $to $value (access _data 0) (access _data 1) _out (add 32 (mul 32 _outitems))))"
+                "(add (get _out) 32)))))");
     }
     // Set up main call
 
@@ -571,43 +724,80 @@ Node storageTransform(Node node, preprocessAux aux,
     else return astnode("sload", o, node.metadata);
 }
 
+// Basic rewrite rule execution
+std::pair<Node, bool> rulesTransform(Node node, rewriteRuleSet macros) {
+    std::string prefix = "_temp_"+mkUniqueToken();
+    bool changed = false;
+    if (!macros.ruleLists.count(node.val))
+        return std::pair<Node, bool>(node, false);
+    std::vector<rewriteRule> rules = macros.ruleLists[node.val];
+    for (unsigned pos = 0; pos < rules.size(); pos++) {
+        rewriteRule macro = rules[pos];
+        matchResult mr = match(macro.pattern, node);
+        if (mr.success) {
+            node = subst(macro.substitution, mr.map, prefix, node.metadata);
+            if (node.val == "error")
+                err(node.args[0].val, node.metadata);
+            std::pair<Node, bool> o = rulesTransform(node, macros);
+            o.second = true;
+            return o;
+        }
+    }
+    return std::pair<Node, bool>(node, changed);
+}
 
-// Recursively applies rewrite rules
-std::pair<Node, bool> apply_rules_iter(preprocessResult pr) {
+std::pair<Node, bool> synonymTransform(Node node) {
+    bool changed = false;
+    if (node.type == ASTNODE && synonymMap.count(node.val)) {
+        node.val = synonymMap[node.val];
+        changed = true;
+    }
+    return std::pair<Node, bool>(node, changed);
+}
+
+rewriteRuleSet nodeMacros;
+rewriteRuleSet setterMacros;
+
+bool dontDescend(std::string s) {
+    return s == "macro" || s == "comment" || s == "outer";
+}
+
+// Recursively applies any set of rewrite rules
+std::pair<Node, bool> apply_rules_iter(preprocessResult pr, rewriteRuleSet rules) {
     bool changed = false;
     Node node = pr.first;
-    // If the rewrite rules have not yet been parsed, parse them
-    if (!nodeMacros.size()) {
-        for (int i = 0; i < 9999; i++) {
-            std::vector<Node> o;
-            if (macros[i][0] == "---END---") break;
-            nodeMacros.push_back(rewriteRule(
-                parseLLL(macros[i][0]),
-                parseLLL(macros[i][1])
-            ));
+    if (dontDescend(node.val))
+        return std::pair<Node, bool>(node, false);
+    std::pair<Node, bool> o = rulesTransform(node, rules);
+    node = o.first;
+    changed = changed || o.second;
+    if (node.type == ASTNODE) {
+        for (unsigned i = 0; i < node.args.size(); i++) {
+            std::pair<Node, bool> r =
+                apply_rules_iter(preprocessResult(node.args[i], pr.second), rules);
+            node.args[i] = r.first;
+            changed = changed || r.second;
         }
     }
-    // Assignment transformations
-    for (int i = 0; i < 9999; i++) {
-        if (setters[i][0] == "---END---") break;
-        if (node.val == setters[i][0]) {
-            node = astnode("=",
-                           node.args[0],
-                           astnode(setters[i][1],
-                                   node.args[0],
-                                   node.args[1],
-                                   node.metadata),
-                           node.metadata);
-        }
+    return std::pair<Node, bool>(node, changed);
+}
+
+// Recursively applies rewrite rules and other primary transformations
+std::pair<Node, bool> mainTransform(preprocessResult pr) {
+    bool changed = false;
+    Node node = pr.first;
+
+    // Anything inside "outer" should be treated as a separate program
+    // and thus recursively compiled in its entirety
+    if (node.val == "outer") {
+        node = apply_rules(preprocess(node.args[0]));
+        changed = true;
     }
-    // Do nothing to macros
-    if (node.val == "macro") {
+
+    // Don't descend into comments, macros and inner scopes
+    if (dontDescend(node.val))
         return std::pair<Node, bool>(node, changed);
-    }
-    // Ignore comments
-    if (node.val == "comment") {
-        return std::pair<Node, bool>(node, changed);
-    }
+
     // Special storage transformation
     if (isNodeStorageVariable(node)) {
         node = storageTransform(node, pr.second);
@@ -628,34 +818,18 @@ std::pair<Node, bool> apply_rules_iter(preprocessResult pr) {
         changed = true;
     }
     // Main code
-	unsigned pos = 0;
-    std::string prefix = "_temp"+mkUniqueToken()+"_";
-    while(1) {
-        if (synonyms[pos][0] == "---END---") {
-            break;
-        }
-        else if (node.type == ASTNODE && node.val == synonyms[pos][0]) {
-            node.val = synonyms[pos][1];
-            changed = true;
-        }
-        pos++;
-    }
-    for (pos = 0; pos < nodeMacros.size() + pr.second.customMacros.size(); pos++) {
-        rewriteRule macro = pos < nodeMacros.size() 
-                ? nodeMacros[pos] 
-                : pr.second.customMacros[pos - nodeMacros.size()];
-        matchResult mr = match(macro.pattern, node);
-        if (mr.success) {
-            node = subst(macro.substitution, mr.map, prefix, node.metadata);
-            std::pair<Node, bool> o =
-                 apply_rules_iter(preprocessResult(node, pr.second));
-            o.second = true;
-            return o;
-        }
-    }
+    std::pair<Node, bool> pnb = synonymTransform(node);
+    node = pnb.first;
+    changed = changed || pnb.second;
+    // std::cerr << priority << " " << macros.size() << "\n";
+    std::pair<Node, bool> pnc = rulesTransform(node, nodeMacros);
+    node = pnc.first;
+    changed = changed || pnc.second;
+
+
     // Special transformations
-    if (node.val == "outer") {
-        node = apply_rules(preprocess(node.args[0]));
+    if (node.val == "log") {
+        node = log_transform(node);
         changed = true;
     }
     if (node.val == "array_lit") {
@@ -666,82 +840,103 @@ std::pair<Node, bool> apply_rules_iter(preprocessResult pr) {
         node = dotTransform(node, pr.second);
         changed = true;
     }
+    if (node.val == "text") {
+        node = string_transform(node);
+        changed = true;
+    }
     if (node.type == ASTNODE) {
 		unsigned i = 0;
+        // Arg 0 of all of these is a variable, so should not be changed
         if (node.val == "set" || node.val == "ref" 
                 || node.val == "get" || node.val == "with") {
-            if (node.args[0].val.size() > 0 && node.args[0].val[0] != '\'' 
-                    && node.args[0].type == TOKEN && node.args[0].val[0] != '$') {
+            if (node.args[0].type == TOKEN && 
+                    node.args[0].val.size() > 0 && node.args[0].val[0] != '\'') {
                 node.args[0].val = "'" + node.args[0].val;
                 changed = true;
             }
             i = 1;
         }
-        else if (node.val == "arglen") {
-            node.val = "get";
-            node.args[0].val = "'_len_" + node.args[0].val;
-            i = 1;
-            changed = true;
-        }
+        // Recursively process children
         for (; i < node.args.size(); i++) {
             std::pair<Node, bool> r =
-                apply_rules_iter(preprocessResult(node.args[i], pr.second));
+                mainTransform(preprocessResult(node.args[i], pr.second));
             node.args[i] = r.first;
             changed = changed || r.second;
         }
     }
+    // Add leading ' to variable names, and wrap them inside get
     else if (node.type == TOKEN && !isNumberLike(node)) {
-        if (node.val.size() >= 2
-                && node.val[0] == '"'
-                && node.val[node.val.size() - 1] == '"') {
-            std::string bin = node.val.substr(1, node.val.size() - 2);
-            unsigned sz = bin.size();
-            std::vector<Node> o;
-            for (unsigned i = 0; i < sz; i += 32) {
-                std::string t = binToNumeric(bin.substr(i, 32));
-                if ((sz - i) < 32 && (sz - i) > 0) {
-                    while ((sz - i) < 32) {
-                        t = decimalMul(t, "256");
-                        i--;
-                    }
-                    i = sz;
-                }
-                o.push_back(token(t, node.metadata));
-            }
-            node = astnode("array_lit", o, node.metadata);
-            std::pair<Node, bool> r = 
-                apply_rules_iter(preprocessResult(node, pr.second));
-            node = r.first;
+        if (node.val.size() && node.val[0] != '\'' && node.val[0] != '$') {
+            Node n = astnode("get", tkn("'"+node.val), node.metadata);
+            node = n;
             changed = true;
         }
-        else if (node.val.size() && node.val[0] != '\'' && node.val[0] != '$') {
-            node.val = "'" + node.val;
-            std::vector<Node> args;
-            args.push_back(node);
-            std::string v = node.val.substr(1);
-            node = astnode("get", args, node.metadata);
-            changed = true;
-        }
+    }
+    // Convert all numbers to normalized form
+    else if (node.type == TOKEN && isNumberLike(node) && !isDecimal(node.val)) {
+        node.val = strToNumeric(node.val, 32);
+        changed = true;
     }
     return std::pair<Node, bool>(node, changed);
 }
 
-Node apply_rules(preprocessResult pr) {
-    for (unsigned i = 0; i < pr.second.customMacros.size(); i++) {
-        pr.second.customMacros[i].pattern =
-            apply_rules(preprocessResult(pr.second.customMacros[i].pattern, preprocessAux()));
+// Do some preprocessing to convert all of our macro lists into compiled
+// forms that can then be reused
+void parseMacros() {
+    for (int i = 0; i < 9999; i++) {
+        std::vector<Node> o;
+        if (macros[i][0] == "---END---") break;
+        nodeMacros.addRule(rewriteRule(
+            parseLLL(macros[i][0]),
+            parseLLL(macros[i][1])
+        ));
     }
-    while (1) {
-        //std::cerr << printAST(pr.first) << 
-        // " " << pr.second.customMacros.size() << "\n";
-        std::pair<Node, bool> r = apply_rules_iter(pr);
-        if (!r.second) {
-            return r.first;
-        }
-        pr.first = r.first;
+    for (int i = 0; i < 9999; i++) {
+        std::vector<Node> o;
+        if (setters[i][0] == "---END---") break;
+        setterMacros.addRule(rewriteRule(
+            asn(setters[i][0], tkn("$x"), tkn("$y")),
+            asn("=", tkn("$x"), asn(setters[i][1], tkn("$x"), tkn("$y")))
+        ));
+    }
+    for (int i = 0; i < 9999; i++) {
+        if (synonyms[i][0] == "---END---") break;
+        synonymMap[synonyms[i][0]] = synonyms[i][1];
     }
 }
 
+Node apply_rules(preprocessResult pr) {
+    // If the rewrite rules have not yet been parsed, parse them
+    if (!nodeMacros.ruleLists.size()) parseMacros();
+    // Iterate over macros by priority list
+    std::map<int, rewriteRuleSet >::iterator it;
+    std::pair<Node, bool> r;
+    for(it=pr.second.customMacros.begin();
+        it != pr.second.customMacros.end(); it++) {
+        while (1) {
+            // std::cerr << "STARTING ARI CYCLE: " << (*it).first <<"\n";
+            // std::cerr << printAST(pr.first) << "\n";
+            r = apply_rules_iter(pr, (*it).second);
+            pr.first = r.first;
+            if (!r.second) break;
+        }
+    }
+    // Apply setter macros
+    while (1) {
+        r = apply_rules_iter(pr, setterMacros);
+        pr.first = r.first;
+        if (!r.second) break;
+    }
+    // Apply all other mactos
+    while (1) {
+        r = mainTransform(pr);
+        pr.first = r.first;
+        if (!r.second) break;
+    }
+    return r.first;
+}
+
+// Pre-validation
 Node validate(Node inp) {
     Metadata m = inp.metadata;
     if (inp.type == ASTNODE) {
@@ -758,6 +953,10 @@ Node validate(Node inp) {
             }
             i++;
         }
+    }
+    else if (inp.type == TOKEN) {
+        if (!inp.val.size()) err("??? empty token", m);
+        if (inp.val[0] == '_') err("Variables cannot start with _", m);
     }
 	for (unsigned i = 0; i < inp.args.size(); i++) validate(inp.args[i]);
     return inp;
@@ -783,22 +982,30 @@ Node postValidate(Node inp) {
         else if (isValidLLLFunc(inp.val, inp.args.size())) {
             // do nothing
         }
-        else err ("Invalid argument count or LLL function: "+inp.val, inp.metadata);
+        else err ("Invalid argument count or LLL function: "+printSimple(inp), inp.metadata);
         for (unsigned i = 0; i < inp.args.size(); i++) {
             inp.args[i] = postValidate(inp.args[i]);
         }
     }
+    if (inp.type == TOKEN) {
+        if (reservedWords.count(inp.val))
+            err("Reserved word: "+inp.val, inp.metadata);
+        if (inp.val[0] == '\'' && reservedWords.count(inp.val.substr(1)))
+            err("Reserved word: "+inp.val.substr(1), inp.metadata);
+        
+    }
     return inp;
 }
 
-Node rewrite(Node inp) {
-    return postValidate(optimize(apply_rules(preprocess(inp))));
-}
 
 Node rewriteChunk(Node inp) {
     return postValidate(optimize(apply_rules(
                         preprocessResult(
                         validate(inp), preprocessAux()))));
+}
+
+Node rewrite(Node inp) {
+    return postValidate(optimize(apply_rules(preprocess(flattenSeq(inp)))));
 }
 
 using namespace std;

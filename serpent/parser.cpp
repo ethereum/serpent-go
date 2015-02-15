@@ -9,7 +9,7 @@
 // Extended BEDMAS precedence order
 int precedence(Node tok) {
     std::string v = tok.val;
-    if (v == ".") return -1;
+    if (v == "." || v == "::") return -1;
     else if (v == "!" || v == "not") return 1;
     else if (v=="^" || v == "**") return 2;
 	else if (v=="*" || v=="/" || v=="%") return 3;
@@ -20,7 +20,7 @@ int precedence(Node tok) {
     else if (v=="||" || v=="or") return 8;
     else if (v=="=") return 10;
     else if (v=="+=" || v=="-=" || v=="*=" || v=="/=" || v=="%=") return 10;
-    else if (v==":" || v == "::") return 11;
+    else if (v==":") return 11;
     else return 0;
 }
 
@@ -221,8 +221,15 @@ Node treefy(std::vector<Node> stream) {
             filename = filename.substr(1, filename.length() - 2);
             if (!exists(root + filename))
                 err("File does not exist: "+root + filename, tok.metadata);
-            oq.back().args.pop_back();
-            oq.back().args.push_back(parseSerpent(root + filename));
+            if (v == "inset") {
+                oq.pop_back();
+                oq.push_back(parseSerpent(root + filename));
+            }
+            else {
+                oq.back().args.pop_back();
+                oq.back().args.push_back(
+                    asn("outer", parseSerpent(root + filename), tok.metadata));
+            }
         }
         //Useful for debugging
         //for (int i = 0; i < oq.size(); i++) {
@@ -344,7 +351,8 @@ Node parseLines(std::vector<std::string> lines, Metadata metadata, int sp) {
         }
         else if (!cbe)
             err("Did not expect indented child block!", out.metadata);
-        else if (out.args.size() && out.args[out.args.size() - 1].val == ":") {
+        else if (out.args.size() && out.val == "multi" 
+                && out.args[out.args.size() - 1].val == ":") {
             Node n = out.args[out.args.size() - 1];
             out.args.pop_back();
             out.args.push_back(n.args[0]);
